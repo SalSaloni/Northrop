@@ -5,7 +5,7 @@ geolimits(latlimits,lonlimits);
 geocenter = [mean(latlimits) mean(lonlimits) 0];
 refHeight = 400;
 hold on
-
+%hello there
 interactiveROI = false;
 load predefinedROI.mat
 helperPlotTakeoffROILanding(gax,takeoffLat,takeoffLon,landLat,landLon,llapoints);
