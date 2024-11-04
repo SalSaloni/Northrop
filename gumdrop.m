@@ -1,105 +1,86 @@
 gax = geoaxes(Basemap="satellite");
 latlimits = [44.3135 44.3534];
 lonlimits = [-72.0227 -71.9544];
-geolimits(latlimits,lonlimits);
+geolimits(latlimits, lonlimits);
 geocenter = [mean(latlimits) mean(lonlimits) 0];
 refHeight = 400;
 hold on
-%hello there
+
+% Load or define the predefined ROI
 interactiveROI = false;
-load predefinedROI.mat
-helperPlotTakeoffROILanding(gax,takeoffLat,takeoffLon,landLat,landLon,llapoints);
+load predefinedROI.mat % Assuming this loads takeoffLat, takeoffLon, landLat, landLon, llapoints
+helperPlotTakeoffROILanding(gax, takeoffLat, takeoffLon, landLat, landLon, llapoints);
 
-if(interactiveROI)
-    [visLimitsLat,visLimitsLon] = geolimits; 
-    [takeoffLat,takeoffLon] = helperTakeoffSelectionFcn(gax,visLimitsLat,visLimitsLon);
-    [llapoints,xyzpoints] = helperPolygonSelectionFcn(gax,visLimitsLat,visLimitsLon,geocenter);
-    [landLat,landLon] = helperLandSelectionFcn(gax,visLimitsLat,visLimitsLon);
+if interactiveROI
+    [visLimitsLat, visLimitsLon] = geolimits; 
+    [takeoffLat, takeoffLon] = helperTakeoffSelectionFcn(gax, visLimitsLat, visLimitsLon);
+    [llapoints, xyzpoints] = helperPolygonSelectionFcn(gax, visLimitsLat, visLimitsLon, geocenter);
+    [landLat, landLon] = helperLandSelectionFcn(gax, visLimitsLat, visLimitsLon);
 end
+
+% Perform the initial decomposition of coverage
 polygons = coverageDecomposition(xyzpoints(:, 1:2));
-polygonAreas = zeros(1, numel(polygons));
 
-for i = 1:numel(polygons)
-    polygonAreas(i) = polyarea(polygons{i}(:, 1), polygons{i}(:, 2));
-end
+% Group polygons based on adjacency into clusters of desired size
+numDrones = 2; 
+numPolygons = numel(polygons);
+subregionsPerDrone = floor(numPolygons / numDrones);
 
-averageArea = mean(polygonAreas);
-threshold = 2 * averageArea; 
-
-finalPolygons = {};
-
-for i = 1:numel(polygons)
-    if polygonAreas(i) > threshold
-        newPolygons = coverageDecomposition(polygons{i}); 
-        finalPolygons = [finalPolygons, newPolygons];
-    else
-        finalPolygons{end + 1} = polygons{i};  
-    end
-end
-
-numDrones = 3; 
-numPolygons = numel(finalPolygons); 
-
-adjacencyGroups = {};
+% Adjacency grouping with contiguous clusters
+clusters = {};
+visited = false(1, numPolygons); % Track visited subregions
 
 for i = 1:numPolygons
-    foundGroup = false;
-    for j = 1:numel(adjacencyGroups)
-        if any(arrayfun(@(k) checkAdjacency(finalPolygons{i}, adjacencyGroups{j}{k}), 1:numel(adjacencyGroups{j})))
-            adjacencyGroups{j}{end + 1} = finalPolygons{i}; 
-            foundGroup = true;
-            break;
-        end
-    end
-    if ~foundGroup
-        adjacencyGroups{end + 1} = {finalPolygons{i}}; 
-    end
-end
-
-numGroups = numel(adjacencyGroups);
-fprintf('Number of groups: %d\n', numGroups);  
-groupsPerDrone = floor(numGroups / numDrones);
-remainingGroups = mod(numGroups, numDrones); 
-
-assignedAreas = cell(1, numDrones);
-
-for i = 1:numDrones
-    assignedCount = groupsPerDrone;
-    if i <= remainingGroups 
-        assignedCount = assignedCount + 1;  
-    end
-    startIndex = (i - 1) * groupsPerDrone + min(i - 1, remainingGroups);
-    assignedAreas{i} = adjacencyGroups(startIndex + (1:assignedCount)); 
-end
-
-for droneIdx = 1:numDrones
-    fprintf('Drone %d is assigned the following areas:\n', droneIdx);
-    for groupIdx = 1:numel(assignedAreas{droneIdx})
-        disp('Group:');
-        for areaIdx = 1:numel(assignedAreas{droneIdx}{groupIdx})
-            disp(assignedAreas{droneIdx}{groupIdx}{areaIdx});
-        end
-    end
-end
-
-subAreasLLA = {};  
-for i = 1:numel(assignedAreas)
-    if ~isempty(assignedAreas{i})  
-        for j = 1:numel(assignedAreas{i})
-            currentPolygon = assignedAreas{i}{j};
-
-            if iscell(currentPolygon)
-                currentPolygon = currentPolygon{1};  
+    if ~visited(i)
+        cluster = {polygons{i}};
+        visited(i) = true;
+        
+        % Expand cluster to meet the target size of contiguous subregions
+        for j = 1:numPolygons
+            if ~visited(j) && numel(cluster) < subregionsPerDrone
+                if any(cellfun(@(poly) checkAdjacency(poly, polygons{j}), cluster))
+                    cluster{end + 1} = polygons{j};
+                    visited(j) = true;
+                end
             end
-            
-            altitude = refHeight * ones(size(currentPolygon, 1), 1);
-            localENU = [currentPolygon(:, 1), currentPolygon(:, 2), altitude];
-            subArea = enu2lla(localENU, geocenter, "flat");
-            subAreasLLA{end + 1} = subArea(:, 1:2); 
         end
+        clusters{end + 1} = cluster; % Add cluster to clusters list
     end
 end
 
+% Adjust clusters to ensure an even distribution
+finalClusters = {};
+for i = 1:numDrones
+    finalClusters{i} = [];
+end
+for i = 1:numel(clusters)
+    droneIdx = mod(i - 1, numDrones) + 1;
+    finalClusters{droneIdx} = [finalClusters{droneIdx}, clusters{i}];
+end
+
+% Display results for each drone
+for droneIdx = 1:numDrones
+    fprintf('Drone %d is assigned the following contiguous areas:\n', droneIdx);
+    for clusterIdx = 1:numel(finalClusters{droneIdx})
+        disp('Subregion:');
+        disp(finalClusters{droneIdx}{clusterIdx});
+    end
+end
+
+% Convert final polygons to geodetic coordinates for visualization
+subAreasLLA = {};  
+for i = 1:numDrones
+    for j = 1:numel(finalClusters{i})
+        currentPolygon = finalClusters{i}{j};
+        
+        altitude = refHeight * ones(size(currentPolygon, 1), 1);
+        localENU = [currentPolygon(:, 1), currentPolygon(:, 2), altitude];
+        subArea = enu2lla(localENU, geocenter, "flat");
+        subAreasLLA{end + 1} = subArea(:, 1:2); 
+    end
+end
+
+% Visualize the assigned areas in geodetic coordinates
 cs = uavCoverageSpace(Polygons=subAreasLLA, ...
                       UnitWidth=100, ...
                       Sidelap=0, ...
@@ -107,11 +88,10 @@ cs = uavCoverageSpace(Polygons=subAreasLLA, ...
                       UseLocalCoordinates=false, ...
                       ReferenceLocation=geocenter);
 
-ax = cs.show(Parent=gax,LineWidth=1.25);
+ax = cs.show(Parent=gax, LineWidth=1.25);
 
+% Function to check adjacency based on shared vertices
 function isAdjacent = checkAdjacency(poly1, poly2)
-    isAdjacent = false;
-    if ~isempty(intersect(poly1, poly2, 'rows'))
-        isAdjacent = true;
-    end
+    % Check if poly1 and poly2 share any vertices
+    isAdjacent = ~isempty(intersect(poly1, poly2, 'rows'));
 end
