@@ -40,13 +40,6 @@ end
 numDrones = 3; 
 numPolygons = numel(finalPolygons); 
 
-function isAdjacent = checkAdjacency(poly1, poly2)
-    isAdjacent = false;
-    if ~isempty(intersect(poly1, poly2, 'rows'))
-        isAdjacent = true;
-    end
-end
-
 adjacencyGroups = {};
 
 for i = 1:numPolygons
@@ -115,3 +108,10 @@ cs = uavCoverageSpace(Polygons=subAreasLLA, ...
                       ReferenceLocation=geocenter);
 
 ax = cs.show(Parent=gax,LineWidth=1.25);
+
+function isAdjacent = checkAdjacency(poly1, poly2)
+    isAdjacent = false;
+    if ~isempty(intersect(poly1, poly2, 'rows'))
+        isAdjacent = true;
+    end
+end
