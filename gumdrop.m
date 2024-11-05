@@ -97,86 +97,97 @@ function isAdjacent = checkAdjacency(poly1, poly2)
 end
 
 % PATHFINDING CODE ADDED HERE:
-function paths = uav_coverage_planner_method(launch_point, polygon_array, sensor_coverage_width)
-    % Initialize paths cell array to store paths and solution info for each polygon
-    paths = cell(1, length(polygon_array));
-    
-    % Create coverage space object with all polygons in polygon_array
-    cs = uavCoverageSpace(Polygons=polygon_array, UseLocalCoordinates=false, ReferenceHeight=400);  % Reference height is set for demonstration
-    
-    % Set unit width for the entire coverage space
+mwLS = [42.3013 -71.375 0];
+latlim = [mwLS(1)-0.003 mwLS(1)+0.003];
+lonlim = [mwLS(2)-0.003 mwLS(2)+0.003];
+
+function paths = uav_coverage_planner_method(launch_point, polygon_array, sensor_coverage_width, reference_location)
+    % Initialize the coverage space with all polygons
+    cs = uavCoverageSpace(Polygons=polygon_array, UseLocalCoordinates=false, ReferenceLocation=reference_location);
     cs.UnitWidth = sensor_coverage_width;
+
+    paths = cell(1, length(polygon_array));
 
     for i = 1:length(polygon_array)
         % Step 1: Calculate Optimal Sweep Angle
-        sweep_angle = calculate_sweep_angle(polygon_array{i}, sensor_coverage_width);
-        fprintf("sweep angle %d: %d", i, rad2deg(sweep_angle))
-        % Step 2: Set Coverage Pattern for each polygon with the calculated sweep angle
-        setCoveragePattern(cs, i, 'SweepAngle', sweep_angle);
+        sweep_angle = calculate_optimal_sweep_angle(polygon_array{i}, sensor_coverage_width);
+
+        % Step 2: Set Coverage Pattern with Calculated Sweep Angle
+        setCoveragePattern(cs, i, SweepAngle=sweep_angle);  % Set the sweep angle specifically for each polygon
     end
 
-    % Step 3: Initialize the UAV coverage planner with the configured coverage space
+    % Step 3: Initialize the UAV coverage planner with coverage space
     cp = uavCoveragePlanner(cs, Solver="Exhaustive");
 
-    % Step 4: Plan the path from launch point
+    % Step 4: Plan the path from the launch point to cover all polygons
     [waypoints, solnInfo] = plan(cp, [launch_point(1), launch_point(2), 0]);
 
-    % Step 5: Store the waypoints and solution info
-    paths{1} = struct('waypoints', waypoints, 'solution_info', solnInfo);
+    % Step 5: Store the generated waypoints and solution info
+    paths = struct('waypoints', waypoints, 'solution_info', solnInfo);
 end
 
-function sweep_angle = calculate_sweep_angle(polygon, sensor_coverage_width)
-    % Get the longest diagonal in the polygon
-    longest_diagonal = find_longest_diagonal(polygon);
+function sweep_angle = calculate_optimal_sweep_angle(polygon, sensor_coverage_width)
+    % Get the centroid of the polygon for orientation calculation
+    centroid = mean(polygon, 1);
+    centroid_3d = [centroid, 0];
 
-    % Calculate the angle along this diagonal
-    x1 = longest_diagonal(1); y1 = longest_diagonal(2);
-    x2 = longest_diagonal(3); y2 = longest_diagonal(4);
-    sweep_angle = atan2d(y2 - y1, x2 - x1);  % Angle in degrees
-end
+    % Use Principal Component Analysis (PCA) to determine the major axis orientation
+    centered_polygon = polygon - centroid;
+    [~, ~, V] = svd(centered_polygon);
 
-function longest_diagonal = find_longest_diagonal(polygon)
-    % Helper function to find the longest diagonal in the polygon
-    max_distance = 0;
-    longest_diagonal = [];
+    % Major axis orientation
+    angle_major_axis = atan2d(V(2, 1), V(1, 1));
 
-    % Loop over each pair of vertices in the polygon
-    for i = 1:size(polygon, 1)
-        for j = i+1:size(polygon, 1)
-            % Calculate Euclidean distance between points
-            distance = sqrt((polygon(i,1) - polygon(j,1))^2 + (polygon(i,2) - polygon(j,2))^2);
-            if distance > max_distance
-                max_distance = distance;
-                longest_diagonal = [polygon(i,1), polygon(i,2), polygon(j,1), polygon(j,2)];
-            end
+    % Alternative angles for comparison
+    alternative_angles = [angle_major_axis, mod(angle_major_axis + 90, 180)];
+    
+    % Initialize minimum distance and best angle
+    min_distance = inf;
+    best_angle = angle_major_axis;
+
+    % Evaluate the distance for each angle and select the minimum
+    for angle = alternative_angles
+        % Update coverage pattern with the current angle
+        cs_temp = uavCoverageSpace(Polygons={polygon}, UseLocalCoordinates=false, ReferenceLocation=centroid_3d);
+        cs_temp.UnitWidth = sensor_coverage_width;
+        setCoveragePattern(cs_temp, 1, SweepAngle=angle);
+
+        % Plan dummy path to get the coverage distance
+        cp_temp = uavCoveragePlanner(cs_temp, Solver="Exhaustive");
+        [~, solnInfo] = plan(cp_temp, [centroid_3d]); % Assume takeoff at centroid with altitude 0
+        
+        % If curr angle is smaller, update angle
+        if solnInfo.DistanceCost < min_distance
+            min_distance = solnInfo.DistanceCost;
+            best_angle = angle;
         end
     end
+
+    % Return the angle that minimized the path distance
+    fprintf("sweep angle: %d \n", rad2deg(best_angle))
+    sweep_angle = best_angle;
 end
 
-
-%USE CASE
-launch_point = [42.30089, -71.3752];  % Example launch point
+% USE CASE
+launch_point = [42.30089, -71.3752];
 polygon_array = {... 
     [42.3028, -71.37527; 42.30325, -71.37442; 42.3027, -71.3736; 42.3017, -71.37378; 42.3019, -71.375234], ...
     [42.30035, -71.3762; 42.2999, -71.3734; 42.2996, -71.37376; 42.2999, -71.37589]
 };
-sensor_coverage_width = 20;  % Sensor coverage width in meters
+sensor_coverage_width = 20;
+reference_location = [42.3013 -71.375 0];
 
 % Call the function to generate paths for each polygon
-paths = uav_coverage_planner_method(launch_point, polygon_array, sensor_coverage_width);
+paths = uav_coverage_planner_method(launch_point, polygon_array, sensor_coverage_width, reference_location);
 
-% Visualization (optional, if required for your project)
-mwLS = [42.3013 -71.375 0];
-latlim = [mwLS(1)-0.003 mwLS(1)+0.003];
-lonlim = [mwLS(2)-0.003 mwLS(2)+0.003];
+% Visualization
 fig = figure;
-g = geoaxes(fig,Basemap="satellite");
-geolimits(latlim,lonlim)
+g = geoaxes(fig, Basemap="satellite");
+geolimits([42.297, 42.305], [-71.378, -71.372])
 geoplot(launch_point(1), launch_point(2), 'ro', 'MarkerSize', 10, 'DisplayName', 'Launch Point');
 hold on;
 for i = 1:length(paths)
-    geoplot(paths{i}.waypoints(:,1), paths{i}.waypoints(:,2), 'LineWidth', 1.5, 'DisplayName', ['Path ' num2str(i)]);
+    geoplot(paths.waypoints(:,1), paths.waypoints(:,2), 'LineWidth', 1.5, 'DisplayName', ['Path ' num2str(i)]);
 end
 legend;
 hold off;
-
