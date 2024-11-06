@@ -7,6 +7,12 @@ geocenter = [mean(latlimits) mean(lonlimits) 0];
 refHeight = 400;
 hold on
 
+% Set the number of UAVs
+numDrones = 1;  % Adjust the number of UAVs
+
+% Define distinct colors for each UAV path
+colors = lines(numDrones); % Generates a colormap with `numDrones` distinct colors
+
 % Load or define the predefined ROI
 interactiveROI = false;
 load predefinedROI.mat % Assuming this loads takeoffLat, takeoffLon, landLat, landLon, llapoints
@@ -20,13 +26,14 @@ if interactiveROI
 end
 
 % Define the grid parameters based on the bounding box of the convex polygon
-numDrones = 4;
+gridSizeX = 6;  % Increase the number of grid cells to get finer coverage
+gridSizeY = 6;
+
+% Get bounding box of the region
 xMin = min(xyzpoints(:,1));
 xMax = max(xyzpoints(:,1));
 yMin = min(xyzpoints(:,2));
 yMax = max(xyzpoints(:,2));
-gridSizeX = 4; % Number of cells in X-direction (adjust as needed)
-gridSizeY = 4; % Number of cells in Y-direction (adjust as needed)
 xGrid = linspace(xMin, xMax, gridSizeX + 1);
 yGrid = linspace(yMin, yMax, gridSizeY + 1);
 
@@ -56,7 +63,7 @@ for i = 1:gridSizeX
     end
 end
 
-% Distribute polygons to UAVs
+% Assign subregions to each UAV in a balanced way
 finalClusters = cell(1, numDrones);
 for i = 1:numel(subPolygons)
     droneIdx = mod(i - 1, numDrones) + 1;
@@ -91,20 +98,26 @@ for droneIdx = 1:numDrones
                               ReferenceHeight=refHeight);
         cs.UnitWidth = coverageWidth;
 
-        show(cs, Parent=gax);
+        % Suppress the automatic legend entries by not calling `show(cs, Parent=gax);`
+        % show(cs, Parent=gax); 
 
-        cp = uavCoveragePlanner(cs, Solver="Exhaustive");
+        cp = uavCoveragePlanner(cs, Solver="MinTraversal"); % Use "MinTraversal" solver
+
         takeoff = [44.3150, -72.0100, 0];
 
         [waypoints, soln] = plan(cp, takeoff);
 
-        geoplot(gax, waypoints(:,1), waypoints(:,2), '-o', 'LineWidth', 1.5, 'DisplayName', sprintf("UAV %d Path", droneIdx));
-        geoplot(gax, takeoff(1), takeoff(2), 'p', 'MarkerSize', 8, 'MarkerFaceColor', 'blue', 'DisplayName', "Takeoff/Landing");
+        % Plot the planned path on the map with unique color and label
+        geoplot(gax, waypoints(:,1), waypoints(:,2), '-o', 'LineWidth', 1.5, 'Color', colors(droneIdx, :), ...
+                'DisplayName', sprintf("UAV %d Path", droneIdx));
+        geoplot(gax, takeoff(1), takeoff(2), 'p', 'MarkerSize', 8, 'MarkerFaceColor', colors(droneIdx, :), ...
+                'DisplayName', sprintf("UAV %d Takeoff/Landing", droneIdx));
     else
         fprintf('No valid polygons assigned to UAV %d\n', droneIdx);
     end
 end
 
-legend("Path", "Takeoff/Landing");
-hold off
+% Manually specify legend entries for only the UAV paths and takeoff/landing points
 
+
+hold off
