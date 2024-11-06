@@ -8,7 +8,7 @@ refHeight = 400;
 hold on
 
 % Set the number of UAVs
-numDrones = 1;  % Adjust the number of UAVs
+numDrones = 5;  % Adjust the number of UAVs
 
 % Define distinct colors for each UAV path
 colors = lines(numDrones); % Generates a colormap with `numDrones` distinct colors
@@ -116,8 +116,97 @@ for droneIdx = 1:numDrones
         fprintf('No valid polygons assigned to UAV %d\n', droneIdx);
     end
 end
+hold off
+
+function helperPlotTakeoffROILanding(gax,tLat,tLon,lLat,lLon,llapoints)
+geoplot(gax,tLat,tLon,LineWidth=2,MarkerSize=25,LineStyle="none",Marker=".")
+text(gax,tLat+0.0025,tLon,"Takeoff",HorizontalAlignment="center",FontWeight="bold")
+geoplot(gax,llapoints(:,1),llapoints(:,2),MarkerSize=25,Marker=".")
+text(gax,mean(llapoints(:,1)),mean(llapoints(:,2))+0.006,"ROI",HorizontalAlignment="center",Color="white",FontWeight="bold")
+geoplot(gax,lLat,lLon,LineWidth=2,MarkerSize=25,LineStyle="none",Marker=".")
+text(gax,lLat+0.0025,lLon,"Landing",HorizontalAlignment="center",FontWeight="bold")
+end
+
+function exampleHelperPlotTakeoffLandingLegend(varargin)
+takeoff = varargin{1};
+landing = varargin{2};
+
+hold on
+scatter(takeoff(1),takeoff(2),45,"filled")
+scatter(landing(1),landing(2),45,"filled")
+
+% If path is specified, then plot path and add that to legend
+if length(varargin) == 3
+    path = varargin{3};
+    plot(path(:,1),path(:,2))
+    legend(["Polygon 1","Polygon 2","Takeoff","Landing","Path"],Location="northwest")
+else    
+    legend(["Polygon 1","Polygon 2","Takeoff","Landing"],Location="northwest")
+end
+hold off
+end
+
+function [Lat,Lon] = helperLandSelectionFcn(geoaxes,cacheLimitsLat,cacheLimitsLon)
+title("Select Landing Position")
+[Lat,Lon] = ginput(1);
+hold on;
+geoplot(geoaxes,Lat, Lon,'r*','MarkerSize',4);
+hold off;
+geolimits(cacheLimitsLat,cacheLimitsLon);
+title("Coverage Space")
+end
+
+function [llapoints,xyzpoints] = helperPolygonSelectionFcn(geoaxes,cacheLimitsLat,cacheLimitsLon,geocenter)
+title(["Draw coverage space polygon","Click Enter to finish drawing polgon"])
+polygonSelectionLoop=true;
+polyLats=[];
+polyLons=[];
+l=[];
+if(polygonSelectionLoop)
+    while true
+        %Interactively define the area of interest.
+        [city.Lat,city.Lon] = ginput(1);
+        if isempty(city.Lat)
+            break % User typed ENTER
+        else
+            hold on;
+            %Cache the Lat and Lons for algorithm.
+            polyLats(end+1)=city.Lat;
+            polyLons(end+1)=city.Lon;
+            geoplot(geoaxes,city.Lat, city.Lon, ...
+                'Marker', 'o', ...
+                'MarkerEdgeColor', 'k', ...
+                'MarkerFaceColor', 'y', ...
+                'MarkerSize', 3);
+            delete(l);
+            l=geoplot([polyLats,polyLats(1)],[polyLons,polyLons(1)],'b');
+            hold off;
+            geolimits(cacheLimitsLat,cacheLimitsLon);
+
+        end
+    end
+end
+
+%Format UAV coordinates
+llapoints=[[polyLats,polyLats(1)]',[polyLons,polyLons(1)]',...
+    zeros(length(polyLats)+1,1)];
+%Convert to ENU
+xyzpoints= lla2enu(llapoints,geocenter,'flat');
+%Trim third coordinate as polygon is 2D.
+xyzpoints(:,3)=[];
+end
+
+function [Lat,Lon] = helperTakeoffSelectionFcn(geoaxes,cacheLimitsLat,cacheLimitsLon)
+title("Select Takeoff Position")
+[Lat,Lon] = ginput(1);
+hold on;
+geoplot(geoaxes,Lat, Lon,'g*','MarkerSize',4);
+hold off;
+geolimits(cacheLimitsLat,cacheLimitsLon);
+end
+
+
 
 % Manually specify legend entries for only the UAV paths and takeoff/landing points
 
 
-hold off
