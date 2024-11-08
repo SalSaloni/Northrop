@@ -1,0 +1,175 @@
+% PATHFINDING CODE ADDED HERE:
+mwLS = [42.3013 -71.375 0];
+latlim = [mwLS(1)-0.003 mwLS(1)+0.003];
+lonlim = [mwLS(2)-0.003 mwLS(2)+0.003];
+
+function [paths, sweep_angles, distance] = uav_coverage_planner_method(launch_point, polygon_array, sensor_coverage_width, reference_location)
+    % Initialize the coverage space with all polygons
+    cs = uavCoverageSpace(Polygons=polygon_array, UseLocalCoordinates=false, ReferenceLocation=reference_location);
+    cs.UnitWidth = sensor_coverage_width;
+
+    paths = cell(1, length(polygon_array));
+    sweep_angles = zeros(1, length(polygon_array));  % Initialize array to store sweep angles
+
+    for i = 1:length(polygon_array)
+        % Step 1: Calculate Optimal Sweep Angle
+        sweep_angle = calculate_optimal_sweep_angle(polygon_array{i}, sensor_coverage_width);
+        sweep_angles(i) = sweep_angle;  % Store sweep angle for each polygon
+
+        % Step 2: Set Coverage Pattern with Calculated Sweep Angle
+        setCoveragePattern(cs, i, SweepAngle=sweep_angle);  % Set the sweep angle specifically for each polygon
+    end
+
+    % Step 3: Initialize the UAV coverage planner with coverage space
+    cp = uavCoveragePlanner(cs, Solver="Exhaustive");
+
+    % Step 4: Plan the path from the launch point to cover all polygons
+    [waypoints, solnInfo] = plan(cp, [launch_point(1), launch_point(2), 0]);
+
+    % Step 5: Store the generated waypoints and solution info
+    paths = struct('waypoints', waypoints, 'solution_info', solnInfo);
+
+    distance = solnInfo.DistanceCost;
+end
+
+
+function sweep_angle = calculate_optimal_sweep_angle(polygon, sensor_coverage_width)
+    % Get the centroid of the polygon for orientation calculation
+    centroid = mean(polygon, 1);
+    centroid_3d = [centroid, 0];
+
+    % Use Principal Component Analysis (PCA) to determine the major axis orientation
+    centered_polygon = polygon - centroid;
+    [~, ~, V] = svd(centered_polygon);
+
+    % Major axis orientation
+    angle_major_axis = atan2d(V(2, 1), V(1, 1));
+
+    % Alternative angles for comparison
+    alternative_angles = [angle_major_axis, mod(angle_major_axis + 90, 180)];
+    
+    % Initialize minimum distance and best angle
+    min_distance = inf;
+    best_angle = angle_major_axis;
+
+    % Evaluate the distance for each angle and select the minimum
+    for angle = alternative_angles
+        % Update coverage pattern with the current angle
+        cs_temp = uavCoverageSpace(Polygons={polygon}, UseLocalCoordinates=false, ReferenceLocation=centroid_3d);
+        cs_temp.UnitWidth = sensor_coverage_width;
+        setCoveragePattern(cs_temp, 1, SweepAngle=angle);
+
+        % Plan dummy path to get the coverage distance
+        cp_temp = uavCoveragePlanner(cs_temp, Solver="Exhaustive");
+        [~, solnInfo] = plan(cp_temp, [centroid_3d]); % Assume takeoff at centroid with altitude 0
+        
+        % If curr angle is smaller, update angle
+        if solnInfo.DistanceCost < min_distance
+            min_distance = solnInfo.DistanceCost;
+            best_angle = angle;
+        end
+    end
+
+    % Return the angle that minimized the path distance
+    fprintf("sweep angle: %d \n", rad2deg(best_angle))
+    sweep_angle = best_angle;
+end
+
+function display_uav_coverage_with_ui(paths, launch_point, distance, sweep_angle, num_drones, speed, battery)
+    % Step 1: Create a temporary figure with geoaxes and make it invisible
+    fig_geo = figure('Name', 'UAV Coverage Visualization', 'Position', [100, 100, 900, 600], 'Visible', 'off');
+    g = geoaxes(fig_geo, 'Basemap', 'satellite');
+    geolimits(g, [42.297, 42.305], [-71.378, -71.372]);
+
+    % Plot the launch point on geoaxes
+    hold(g, 'on');
+    geoplot(g, launch_point(1), launch_point(2), 'ro', 'MarkerSize', 10, 'DisplayName', 'Launch Point');
+
+    % Plot the paths for each polygon on geoaxes
+    for i = 1:length(paths)
+        geoplot(g, paths(i).waypoints(:,1), paths(i).waypoints(:,2), 'LineWidth', 1.5, 'DisplayName', ['Path ' num2str(i)]);
+    end
+    legend(g, 'show');
+    hold(g, 'off');
+
+    % Step 2: Capture the screenshot of the figure
+    imageFile = fullfile(tempdir, 'geo_map.png');
+    exportgraphics(g, imageFile, 'Resolution', 150);  % Save figure as a PNG image
+
+    % Close the temporary figure after capturing the screenshot
+    close(fig_geo);
+
+    % Step 3: Create a uifigure with a custom background and layout
+    fig_ui = uifigure('Name', 'UAV Coverage Control Panel', 'Position', [100, 100, 1000, 900], 'Color', [0.15, 0.15, 0.15]);
+
+    % Set up a title label with custom font and color, fully visible at the top
+    titleLabel = uilabel(fig_ui, 'Text', 'UAV Coverage Control Panel', 'Position', [300, 850, 400, 40], 'HorizontalAlignment', 'center');
+    titleLabel.FontSize = 22;
+    titleLabel.FontWeight = 'bold';
+    titleLabel.FontColor = [0.9, 0.9, 1];
+
+    % Add a background panel to organize information
+    infoPanel = uipanel(fig_ui, 'Position', [50, 50, 900, 780], 'BackgroundColor', [0.2, 0.2, 0.2], 'BorderType', 'none');
+
+    % Adjust map position and size so it's centered and fully visible, taking up the top half of the display
+    mapImage = uiimage(infoPanel);
+    mapImage.Position = [50, 200, 800, 350];
+    mapImage.ImageSource = imageFile;
+
+    % Display key data in two columns below the map
+    column1_x = 180; % X position for first column
+    column2_x = 530; % X position for second column
+    label_y_start = 160; % Starting Y position for labels below the map
+    label_y_gap = 40; % Vertical gap between each label
+
+    % Column 1 - Adjusted positions for better spacing
+    uilabel(infoPanel, 'Text', 'Distance:', 'Position', [column1_x, label_y_start, 100, 30], 'FontSize', 14, 'FontColor', [0.9, 0.9, 1]);
+    uilabel(infoPanel, 'Text', sprintf('%.2f m', distance), 'Position', [column1_x + 80, label_y_start, 120, 30], 'FontSize', 14, 'FontWeight', 'bold', 'FontColor', [0.7, 1, 0.7]);
+
+    uilabel(infoPanel, 'Text', 'Drones:', 'Position', [column1_x, label_y_start - label_y_gap, 100, 30], 'FontSize', 14, 'FontColor', [0.9, 0.9, 1]);
+    uilabel(infoPanel, 'Text', sprintf('%d', num_drones), 'Position', [column1_x + 80, label_y_start - label_y_gap, 120, 30], 'FontSize', 14, 'FontWeight', 'bold', 'FontColor', [0.7, 1, 0.7]);
+
+    uilabel(infoPanel, 'Text', 'Start:', 'Position', [column1_x, label_y_start - 2 * label_y_gap, 100, 30], 'FontSize', 14, 'FontColor', [0.9, 0.9, 1]);
+    uilabel(infoPanel, 'Text', sprintf('[%.5f, %.5f]', launch_point), 'Position', [column1_x + 80, label_y_start - 2 * label_y_gap, 200, 30], 'FontSize', 14, 'FontWeight', 'bold', 'FontColor', [0.7, 1, 0.7]);
+
+    % Column 2 - Adjusted positions for better spacing
+    uilabel(infoPanel, 'Text', 'Time:', 'Position', [column2_x, label_y_start, 100, 30], 'FontSize', 14, 'FontColor', [0.9, 0.9, 1]);
+    uilabel(infoPanel, 'Text', sprintf('%.2f s', distance * speed), 'Position', [column2_x + 60, label_y_start, 120, 30], 'FontSize', 14, 'FontWeight', 'bold', 'FontColor', [0.7, 1, 0.7]);
+
+    sweep_angle_text = sprintf('%.2f, ', sweep_angle);
+    sweep_angle_text = sweep_angle_text(1:end-2); % Remove trailing comma and space
+    uilabel(infoPanel, 'Text', 'Sweep Angles:', 'Position', [column2_x, label_y_start - label_y_gap, 120, 30], 'FontSize', 14, 'FontColor', [0.9, 0.9, 1]);
+    uilabel(infoPanel, 'Text', sweep_angle_text, 'Position', [column2_x + 100, label_y_start - label_y_gap, 200, 30], 'FontSize', 14, 'FontWeight', 'bold', 'FontColor', [0.7, 1, 0.7]);
+
+    uilabel(infoPanel, 'Text', 'Speed:', 'Position', [column2_x, label_y_start - 2 * label_y_gap, 100, 30], 'FontSize', 14, 'FontColor', [0.9, 0.9, 1]);
+    uilabel(infoPanel, 'Text', sprintf('%.1f m/s', speed), 'Position', [column2_x + 60, label_y_start - 2 * label_y_gap, 100, 30], 'FontSize', 14, 'FontWeight', 'bold', 'FontColor', [0.7, 1, 0.7]);
+
+    uilabel(infoPanel, 'Text', 'Battery:', 'Position', [column2_x, label_y_start - 3 * label_y_gap, 100, 30], 'FontSize', 14, 'FontColor', [0.9, 0.9, 1]);
+    uilabel(infoPanel, 'Text', sprintf('%d%%', battery), 'Position', [column2_x + 60, label_y_start - 3 * label_y_gap, 100, 30], 'FontSize', 14, 'FontWeight', 'bold', 'FontColor', [0.7, 1, 0.7]);
+end
+
+% USE CASE
+launch_point = [42.30089, -71.3752];
+polygon_array = {... 
+    [42.3028, -71.37527; 42.30325, -71.37442; 42.3027, -71.3736; 42.3017, -71.37378; 42.3019, -71.375234], ...
+    [42.30035, -71.3762; 42.2999, -71.3734; 42.2996, -71.37376; 42.2999, -71.37589]
+};
+sensor_coverage_width = 20;
+reference_location = [42.3013 -71.375 0];
+
+% Call the function to generate paths for each polygon
+[paths, sweep_angles, distance] = uav_coverage_planner_method(launch_point, polygon_array, sensor_coverage_width, reference_location);
+
+% Visualization
+fig = figure;
+g = geoaxes(fig, Basemap="satellite");
+geolimits([42.297, 42.305], [-71.378, -71.372])
+geoplot(launch_point(1), launch_point(2), 'ro', 'MarkerSize', 10, 'DisplayName', 'Launch Point');
+hold on;
+for i = 1:length(paths)
+    geoplot(paths.waypoints(:,1), paths.waypoints(:,2), 'LineWidth', 1.5, 'DisplayName', ['Path ' num2str(i)]);
+end
+legend;
+hold off;
+
+display_uav_coverage_with_ui(paths, launch_point, distance, sweep_angles, 1, 10, 100)
